@@ -1,7 +1,6 @@
 # Cerun GUI
 
-A Qt frontend for launching executables inside a running Steam compatibility
-prefix.
+A Qt frontend for launching executables inside a running proton/wine prefix.
 
 ## Install
 

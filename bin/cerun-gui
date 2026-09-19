@@ -1,0 +1,5 @@
+#!/bin/bash
+set -eu
+PREFIX_DIR=$(cd -- "$(dirname -- "$(readlink -f -- "$0")")/.." && pwd)
+APP_DIR="$PREFIX_DIR/lib/cerun-gui"
+exec /usr/bin/python3 -B "$APP_DIR/cerun_gui.py" "$@"

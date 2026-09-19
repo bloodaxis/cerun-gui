@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Cerun GUI
+Comment=Launch an executable inside a running Steam compatibility prefix
+Exec=cerun-gui
+Icon=cerun-gui
+Terminal=false
+Categories=Game;
+StartupNotify=true
+StartupWMClass=cerun

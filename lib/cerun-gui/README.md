@@ -1,25 +1,33 @@
 # cerun GUI
 
-Run `./cerun-gui` from the enclosing package directory.
+Start it with `cerun-gui`, or from the application menu.
 
 The first four rows select the executable to launch. Edit a path directly or
 use Browse. Steam path is the installation folder containing `steamapps`.
-Save paths writes the existing `~/.config/cerun/executables.conf` format.
-Launch also saves edits. Blank numbered shortcuts are allowed; the default
-executable and Steam path are required. Reload paths reads external changes.
+Save paths writes `~/.config/cerun/executables.conf`; Launch also saves edits.
+Blank numbered shortcuts are allowed; the default executable and Steam path are
+required. An executable that is missing at the moment (for example on an
+unmounted drive) is reported but only blocks launching that executable.
+Reload paths reads external changes. A config file that cannot be parsed is
+reported and can be replaced by saving the paths entered in the window.
 
-Select a running .exe process in the table, then press Launch. Refresh processes
-updates the table and retains the selection only while the same process exists.
-The wrapper calls its bundled plain-text `cerun-backend.sh --pid PID /path/to/helper.exe /path/to/steam`, which runs without a terminal. The backend retains its Proton
-lookup, registry setup, and Flatpak runtime entry behavior.
+Select a running .exe process in the table, then press Launch. The table is
+refreshed whenever the window is activated and by Refresh processes; the
+selection is retained only while the same process exists. Several executables
+can run at once; Launch is disabled only for an executable that is already
+running for the selected process.
 
-Log opens the latest GUI launch log in the default application, including failed
-launch output. Logs are saved in `~/.local/state/cerun`; the latest is remembered
-across GUI restarts. The backend also retains its normal `/tmp/cerun.*.log`.
-Closing the GUI leaves launched applications running.
+The window calls its bundled plain-text
+`cerun-backend.sh --pid PID /path/to/helper.exe /path/to/steam`, which runs
+without a terminal and handles the Proton lookup, registry setup and Flatpak
+runtime entry.
 
-## Dependencies and development
+Log opens the latest launch log in the default application; after a failed
+launch it opens the log of that launch. Logs are saved in
+`~/.local/state/cerun` (the newest 20 are kept) and the latest is remembered
+across restarts. Closing the window leaves launched applications running.
+
+## Dependencies
 
 Python 3 and PySide6 are required. The GUI runs on the host to see the process
-list and access the existing Flatpak runtime. The Bash backend is bundled here
-as plain text.
+list and access the existing Flatpak runtime.

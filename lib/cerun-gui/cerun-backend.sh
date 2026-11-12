@@ -211,9 +211,8 @@ main() {
 	SELECTED_PID=$((10#$2))
 	EXEC=$3
 	STEAMPATH=$4
-	local logfile="/tmp/cerun.$(date '+%Y%m%d-%H%M%S-%N').log"
-	exec > >(tee -a "$logfile") 2>&1
-	echo "cerun log: $logfile"
+	# The caller owns the log: the GUI already redirects this output to a file.
+	exec 2>&1
 	[ -f "$EXEC" ] || die "Executable not found: $EXEC"
 	[[ "$STEAMPATH" == /* ]] && [ -d "$STEAMPATH/steamapps" ] || die "Steam installation not found: $STEAMPATH"
 	[ -r "/proc/$SELECTED_PID/status" ] || die "Selected process $SELECTED_PID is no longer available. Refresh the process list."

@@ -1,17 +1,8 @@
 #!/bin/bash
-# Usage: cerun-configured [automatic [1-3] | ls | /path/to/tool.exe]
-# GUI/noninteractive: cerun-configured --pid PID /path/to/tool.exe
-# No arguments opens the launch/configuration menu. Config values are plain
-# paths, not shell code. Registry changes apply only to the selected helper.
 set -u
 
-CONFIG_DIR="$HOME/.config/cerun"
-CONFIG_FILE="$CONFIG_DIR/executables.conf"
-CONFIG_KEYS=(DEFAULT_EXE EXE_1 EXE_2 EXE_3 STEAMPATH)
-for key in "${CONFIG_KEYS[@]}"; do printf -v "$key" ''; done
-AUTOMATIC=false
-HEADLESS=false
 EXEC=""
+STEAMPATH=""
 APPID=""
 COMPAT_PATH=""
 PRTEXEC=""
@@ -19,7 +10,6 @@ RUNTIME_PID=""
 
 die() { printf '%s\n' "$*" >&2; exit 1; }
 
-# REPLY is shared by input helpers, avoiding a subshell for every prompt/path.
 expand_path() {
 	REPLY=$1
 	case "$REPLY" in
@@ -28,184 +18,10 @@ expand_path() {
 	esac
 }
 
-choose() {
-	local answer
-	while true; do
-		read -rp "$1: " answer < /dev/tty || return 1
-		# Limit length before arithmetic; use decimal even for leading zeros.
-		if [[ "$answer" =~ ^[0-9]{1,9}$ ]] &&
-			((10#$answer >= $2 && 10#$answer <= $3)); then
-			REPLY=$((10#$answer)); return 0
-		fi
-		echo "Invalid selection."
-	done
-}
-
-prompt_path() {
-	local target=$1 value
-	"$HEADLESS" && die "Configure $target in $CONFIG_FILE before launching without a terminal."
-	echo "Enter $target without quotes (~/ is accepted)."
-	case "$target" in
-		STEAMPATH) echo "Use the Steam installation folder containing steamapps." ;;
-		EXE_[1-3]) echo "Press Enter to clear this optional shortcut." ;;
-	esac
-	while true; do
-		read -rp "$target: " value < /dev/tty || return 1
-		expand_path "$value"
-		if [[ "$target" == EXE_[1-3] && -z "$REPLY" ]]; then return 0; fi
-		if [[ "$REPLY" == /* ]]; then
-			if [ "$target" = STEAMPATH ]; then
-				if [ -d "$REPLY/steamapps" ]; then REPLY=${REPLY%/}; return 0; fi
-			elif [ -f "$REPLY" ]; then return 0
-			fi
-		fi
-		echo "Path is not usable. Enter an existing absolute path."
-	done
-}
-
-save_config() (
-	local temp key
-	mkdir -p -- "$CONFIG_DIR" || exit 1
-	temp=$(mktemp "$CONFIG_DIR/.executables.XXXXXX") || exit 1
-	trap 'rm -f -- "$temp"' EXIT
-	{
-		printf '# Executable and Steam paths: plain values, no shell quotes.\n'
-		for key in "${CONFIG_KEYS[@]}"; do printf '%s=%s\n' "$key" "${!key}"; done
-	} > "$temp" && mv -- "$temp" "$CONFIG_FILE" || exit 1
-	echo "Saved paths to $CONFIG_FILE"
-)
-
-load_config() {
-	local line key
-	if [ ! -f "$CONFIG_FILE" ]; then
-		"$HEADLESS" && die "Config not found: $CONFIG_FILE. Save paths in the GUI first."
-		echo "No config found. Set the default executable, optional shortcuts, and Steam path."
-		for key in "${CONFIG_KEYS[@]}"; do
-			prompt_path "$key" || die "Setup cancelled; no config saved."
-			printf -v "$key" '%s' "$REPLY"
-		done
-		save_config || die "Could not save $CONFIG_FILE."
-		return
-	fi
-	[ -r "$CONFIG_FILE" ] || die "Cannot read $CONFIG_FILE."
-	while IFS= read -r line || [ -n "$line" ]; do
-		case "$line" in ''|'#'*) continue ;; esac
-		[[ "$line" == *=* ]] || die "Invalid config line: $line"
-		key=${line%%=*}
-		case "$key" in
-			DEFAULT_EXE|EXE_[1-3]|STEAMPATH)
-				expand_path "${line#*=}"; printf -v "$key" '%s' "$REPLY" ;;
-			*) die "Unknown config key: $key" ;;
-		esac
-	done < "$CONFIG_FILE"
-	[ -n "$DEFAULT_EXE" ] || die "Set DEFAULT_EXE in $CONFIG_FILE."
-	if [[ "$STEAMPATH" != /* ]] || [ ! -d "$STEAMPATH/steamapps" ]; then
-		prompt_path STEAMPATH || die "Setup cancelled; Steam path was not saved."
-		STEAMPATH=$REPLY
-		save_config || die "Could not save $CONFIG_FILE."
-	fi
-}
-
-list_paths() {
-	local i key
-	for ((i = 0; i < $1; i++)); do
-		key=${CONFIG_KEYS[i]}
-		printf ' %d) %-11s %s\n' "$((i + 1))" "$key" "${!key:-not configured}"
-	done
-}
-
-edit_config() {
-	local key old
-	list_paths 5
-	echo " 0) Back to launch menu"
-	choose 'Select path to update [0-5]' 0 5 || { echo 'Configuration cancelled.'; return 0; }
-	((REPLY)) || return 0
-	key=${CONFIG_KEYS[REPLY - 1]}
-	prompt_path "$key" || { echo "Configuration cancelled; no changes saved."; return 0; }
-	old=${!key}
-	printf -v "$key" '%s' "$REPLY"
-	if ! save_config; then
-		printf -v "$key" '%s' "$old"
-		echo "Could not save config; previous value retained."
-	fi
-}
-
-select_executable() {
-	list_paths 4
-	choose 'Select executable [1-4]' 1 4 || die "Launch cancelled."
-	local key=${CONFIG_KEYS[REPLY - 1]}
-	EXEC=${!key}
-}
-
-launch_menu() {
-	while true; do
-		cat <<'USAGE'
-Command-line usage:
- cerun-configured                 Show this menu
- cerun-configured automatic       Automatically launch the default executable
- cerun-configured automatic 1-3   Automatically launch EXE_1, EXE_2, or EXE_3
- cerun-configured ls              Select an executable, then a running process
- cerun-configured "/path/tool.exe" Use a custom executable, then select a process
- Replace 1-3 with one number. Quote command-line paths containing spaces.
-
-Launch mode:
- 1) Automatic: default executable in the running Steam game
- 2) Select executable, then select the running process/prefix
- 3) Enter an executable path, then select the running process/prefix
- 4) Rerun configuration (choose one of five saved paths)
-USAGE
-		# Keep the menu's existing automatic/ls aliases as well as its numbers.
-		read -rp 'Select launch mode [1-4]: ' REPLY < /dev/tty || die "Launch cancelled."
-		case "$REPLY" in
-			1|automatic) AUTOMATIC=true; EXEC=$DEFAULT_EXE; return ;;
-			2|ls) select_executable; return ;;
-			3) prompt_path EXEC || die "Launch cancelled."; EXEC=$REPLY; return ;;
-			4) edit_config ;;
-			*) echo "Invalid selection." ;;
-		esac
-	done
-}
-
-select_process() {
-	local pid command_line name id i
-	local -a pids=() names=() commands=()
-	local -A steam_pids=()
-	# Read comm separately: its spaces must not shift the command-line column.
-	while read -r pid command_line; do
-		if "$AUTOMATIC"; then
-			if [[ "$command_line" =~ (^|[[:space:]])AppId=([0-9]+)($|[[:space:]]) ]]; then
-				id=${BASH_REMATCH[2]}
-				[ "$id" = 0 ] || steam_pids[$id]=$pid
-			fi
-		else
-			name=""
-			if [ -r "/proc/$pid/comm" ]; then IFS= read -r name < "/proc/$pid/comm" || :; fi
-			if [[ "${name,,}" == *.exe || "${command_line,,}" == *'.exe'* ]]; then
-				pids+=("$pid"); names+=("$name"); commands+=("$command_line")
-			fi
-		fi
-	done < <(ps -eo pid=,args=)
-	if "$AUTOMATIC"; then
-		[ "${#steam_pids[@]}" -eq 1 ] || die "automatic requires exactly one running Steam game; found ${#steam_pids[@]}. Use ls to select a process."
-		for APPID in "${!steam_pids[@]}"; do SELECTED_PID=${steam_pids[$APPID]}; done
-		echo "Automatically selected Steam AppID: $APPID"
-	else
-		[ "${#pids[@]}" -gt 0 ] || die "No running .exe processes detected."
-		for i in "${!pids[@]}"; do
-			printf '%2d) PID %-7s %-28s %s\n' "$((i + 1))" "${pids[i]}" "${names[i]}" "${commands[i]:0:100}"
-		done
-		choose "Select process [1-${#pids[@]}]" 1 "${#pids[@]}" || die "Launch cancelled."
-		SELECTED_PID=${pids[REPLY - 1]}
-		echo "Selected process: ${names[REPLY - 1]} (PID $SELECTED_PID)"
-	fi
-}
-
-# Cache each environment once, including during fallback traversal.
-declare -A PROCESS_ENV=() ENV_LOADED=()
+# Each PID is visited once during the lookup.
+declare -A PROCESS_ENV=()
 read_environment() {
 	local pid=$1 entry key
-	[ "${ENV_LOADED[$pid]-}" ] && return
-	ENV_LOADED[$pid]=1
 	[ -r "/proc/$pid/environ" ] || return 0
 	while IFS= read -r -d '' entry; do
 		key=${entry%%=*}
@@ -250,20 +66,18 @@ lookup_launch() {
 	local ancestry_proton="" assignment_re="(STEAM_COMPAT_DATA_PATH|WINEPREFIX)=(\"[^\"]*\"|'[^']*'|[^[:space:];]+)"
 	local proton_re="(\"/[^\"]*/proton\"|'/[^']*/proton'|/[^[:space:]\"']*/proton)"
 	local -a paths=()
-	read_environment "$pid"
-	APPID=${APPID:-${PROCESS_ENV[$pid:SteamAppId]:-${PROCESS_ENV[$pid:SteamGameId]-}}}
-	IFS=: read -r -a paths <<< "${PROCESS_ENV[$pid:STEAM_COMPAT_TOOL_PATHS]-}"
-	for path in "${paths[@]}"; do
-		if [ -x "$path/proton" ]; then PRTEXEC="$path/proton"; break; fi
-	done
-	accept_prefix "${PROCESS_ENV[$pid:STEAM_COMPAT_DATA_PATH]-}"
-	accept_prefix "${PROCESS_ENV[$pid:WINEPREFIX]-}"
-	proton_metadata
-	# Walk once only when necessary, retaining Proton candidates while seeking a prefix.
+	# Walk each PID once, retaining Proton candidates while seeking a prefix.
 	for ((depth = 0; depth < 128; depth++)); do
 		[ -z "$COMPAT_PATH" ] || [ -z "$PRTEXEC" ] || break
 		[[ "$pid" =~ ^[0-9]+$ ]] && ((pid > 1)) || break
 		read_environment "$pid"
+		APPID=${APPID:-${PROCESS_ENV[$pid:SteamAppId]:-${PROCESS_ENV[$pid:SteamGameId]-}}}
+		if [ -z "$PRTEXEC" ]; then
+			IFS=: read -r -a paths <<< "${PROCESS_ENV[$pid:STEAM_COMPAT_TOOL_PATHS]-}"
+			for path in "${paths[@]}"; do
+				if [ -x "$path/proton" ]; then PRTEXEC="$path/proton"; break; fi
+			done
+		fi
 		accept_prefix "${PROCESS_ENV[$pid:STEAM_COMPAT_DATA_PATH]-}"
 		accept_prefix "${PROCESS_ENV[$pid:WINEPREFIX]-}"
 		if [ -r "/proc/$pid/cmdline" ]; then
@@ -333,10 +147,10 @@ run_proton() {
 		"STEAM_COMPAT_DATA_PATH=$COMPAT_PATH" "STEAM_COMPAT_CLIENT_INSTALL_PATH=$STEAMPATH"
 		"$PRTEXEC" runinprefix "$@")
 	if [ -n "$RUNTIME_PID" ]; then
-		flatpak enter "$RUNTIME_PID" "${command[@]}"
-	else
-		"${command[@]}"
+		command=(flatpak enter "$RUNTIME_PID" "${command[@]}")
 	fi
+	printf 'Running command: '; printf '%q ' "${command[@]}"; printf '\n'
+	"${command[@]}"
 }
 
 # One definition feeds both the saved-registry comparison and the import.
@@ -391,43 +205,23 @@ apply_registry() (
 )
 
 main() {
-	local mode=${1-} key status basename
-	case "$mode" in
-		--pid)
-			[ "$#" -eq 3 ] && [[ "$2" =~ ^[0-9]{1,9}$ ]] && ((10#$2 > 1)) || die "Usage: cerun-configured --pid PID /path/to/tool.exe"
-			HEADLESS=true; SELECTED_PID=$((10#$2)) ;;
-		automatic)
-			[ "$#" -le 2 ] && { [ "$#" -eq 1 ] || [[ "$2" == [1-3] ]]; } || die "Usage: cerun-configured automatic [1-3]"
-			AUTOMATIC=true ;;
-		*) [ "$#" -le 1 ] && [[ ! "$mode" =~ ^[0-9]+$ ]] || die "Use automatic [1-3], ls, or an executable path." ;;
-	esac
-	if ! "$HEADLESS" && { [ ! -t 0 ] || [ ! -t 1 ]; }; then
-		local -a command=(bash -lc '"$@"; status=$?; printf "\nPress any key to exit..."; read -r -n 1 -s < /dev/tty; printf "\n"; exit "$status"' bash "$(readlink -f -- "$0")" "$@")
-		if command -v xdg-terminal-exec >/dev/null 2>&1; then exec xdg-terminal-exec -- "${command[@]}"; fi
-		if command -v x-terminal-emulator >/dev/null 2>&1; then exec x-terminal-emulator -e "${command[@]}"; fi
-		die "No default-terminal launcher found. Run this script from a terminal."
-	fi
+	local status basename
+	[ "$#" -eq 4 ] && [ "$1" = --pid ] && [[ "$2" =~ ^[0-9]{1,9}$ ]] &&
+		((10#$2 > 1)) || die "Usage: cerun-backend.sh --pid PID /path/to/tool.exe /path/to/steam"
+	SELECTED_PID=$((10#$2))
+	EXEC=$3
+	STEAMPATH=$4
 	local logfile="/tmp/cerun.$(date '+%Y%m%d-%H%M%S-%N').log"
 	exec > >(tee -a "$logfile") 2>&1
 	echo "cerun log: $logfile"
-	load_config
-	case "$mode" in
-		--pid) EXEC=$3 ;;
-		'') launch_menu ;;
-		automatic) key=DEFAULT_EXE; [ "$#" -eq 1 ] || key=EXE_$2; EXEC=${!key} ;;
-		ls) select_executable ;;
-		*) EXEC=$mode ;;
-	esac
-	[ -f "$EXEC" ] || die "Executable not found or shortcut not configured: $EXEC"
-	if "$HEADLESS"; then
-		[ -r "/proc/$SELECTED_PID/status" ] || die "Selected process $SELECTED_PID is no longer available. Refresh the process list."
-		echo "Selected process: PID $SELECTED_PID"
-	else
-		select_process
-	fi
+	[ -f "$EXEC" ] || die "Executable not found: $EXEC"
+	[[ "$STEAMPATH" == /* ]] && [ -d "$STEAMPATH/steamapps" ] || die "Steam installation not found: $STEAMPATH"
+	[ -r "/proc/$SELECTED_PID/status" ] || die "Selected process $SELECTED_PID is no longer available. Refresh the process list."
+	echo "Selected process: PID $SELECTED_PID"
 	lookup_launch
 	prepare_runtime
-	printf 'AppID: %s\nUsing Proton: %s\nUsing prefix: %s\nSelected executable: %s\n' "${APPID:-not available}" "$PRTEXEC" "$COMPAT_PATH" "$EXEC"
+	printf 'AppID: %s\nSteam installation: %s\nUsing Proton: %s\nCompat data path: %s\nWine prefix: %s\nSelected executable: %s\n' \
+		"${APPID:-not available}" "$STEAMPATH" "$PRTEXEC" "$COMPAT_PATH" "$COMPAT_PATH/pfx" "$EXEC"
 	basename=${EXEC##*/}
 	APP_KIND=""
 	case "${basename,,}" in

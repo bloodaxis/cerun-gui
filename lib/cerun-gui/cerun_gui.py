@@ -1,5 +1,5 @@
 #!/usr/bin/python3
-"""Native Qt frontend for cerun-configured. No shell evaluation or terminal."""
+"""Native Qt frontend for the bundled Proton launcher."""
 from __future__ import annotations
 
 import os
@@ -10,8 +10,8 @@ import tempfile
 from dataclasses import dataclass
 from datetime import datetime
 
-from PySide6.QtCore import Qt, QTimer, QUrl
-from PySide6.QtGui import QDesktopServices, QIcon
+from PySide6.QtCore import QRegularExpression, Qt, QTimer, QUrl
+from PySide6.QtGui import QDesktopServices, QIcon, QRegularExpressionValidator
 from PySide6.QtWidgets import (
     QApplication, QButtonGroup, QFileDialog, QGroupBox, QHBoxLayout,
     QHeaderView, QLabel, QLineEdit, QMainWindow, QMessageBox, QPushButton,
@@ -106,6 +106,16 @@ def list_processes(proc_root: Path = Path("/proc")) -> list[Process]:
     return sorted(result, key=lambda item: item.pid)
 
 
+class SingleLinePathEdit(QLineEdit):
+    def __init__(self):
+        super().__init__()
+        self.setValidator(QRegularExpressionValidator(QRegularExpression(r"[^\r\n]*"), self))
+
+    def setText(self, value: str) -> None:
+        if "\n" not in value and "\r" not in value:
+            super().setText(value)
+
+
 class Window(QMainWindow):
     def __init__(self, config: Path | None = None, backend: Path | None = None,
                  state: Path | None = None, proc_root: Path = Path("/proc")):
@@ -140,8 +150,8 @@ class Window(QMainWindow):
                 label = QLabel("Steam path")
             label.setMinimumWidth(105)
             row.addWidget(label)
-            edit = QLineEdit()
-            edit.setPlaceholderText("Folder containing steamapps" if index == 4 else "Executable path — no quotes")
+            edit = SingleLinePathEdit()
+            edit.setPlaceholderText("Folder containing steamapps" if index == 4 else "Executable path")
             edit.textChanged.connect(self.update_launch)
             self.paths[key] = edit
             row.addWidget(edit, 1)
@@ -294,7 +304,8 @@ class Window(QMainWindow):
             # A real file, not a pipe: closing this GUI does not kill the launcher
             # or break its output. All arguments remain separate, including spaces.
             with os.fdopen(fd, "wb") as output:
-                self.child = subprocess.Popen([str(self.backend), "--pid", str(process.pid), executable],
+                steam_path = expand_path(self.paths["STEAMPATH"].text())
+                self.child = subprocess.Popen([str(self.backend), "--pid", str(process.pid), executable, steam_path],
                                               stdin=subprocess.DEVNULL, stdout=output,
                                               stderr=subprocess.STDOUT, start_new_session=True)
             (self.state / "last-log").write_text(str(self.last_log))
